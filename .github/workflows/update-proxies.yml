@@ -4,8 +4,6 @@ on:
   schedule:
     - cron: '0 */6 * * *'  # Cada 6 horas
   workflow_dispatch:  # Ejecución manual
-  push:
-    branches: [ main ]
 
 jobs:
   update-proxies:
@@ -17,80 +15,66 @@ jobs:
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        
-    - name: Install axios
-      run: npm install -g axios
-      
-    - name: Create update script
+    - name: Create and run update script
       run: |
-        cat > update.js << 'EOF'
-        const axios = require('axios');
-        const fs = require('fs');
-
-        async function updateProxies() {
-            try {
-                console.log('🔍 Obteniendo proxies de GeoNode API...');
-                const response = await axios.get('https://proxylist.geonode.com/api/proxy-list?limit=50&page=1&sort_by=lastChecked&sort_type=desc');
-                
-                const proxies = response.data.data;
-                console.log(`📊 Encontrados ${proxies.length} proxies totales`);
-
-                // Filtrar proxies HTTP válidos
-                let validProxies = [];
-                proxies.forEach(proxy => {
-                    if (proxy.ip && proxy.port && proxy.protocols) {
-                        if ((proxy.protocols.includes('http') || proxy.protocols.includes('https')) && 
-                            proxy.uptime && parseFloat(proxy.uptime) > 50) {
-                            validProxies.push(`${proxy.ip}:${proxy.port}`);
-                        }
-                    }
-                });
-
-                console.log(`✅ ${validProxies.length} proxies válidos encontrados`);
-
-                if (validProxies.length === 0) {
-                    console.log('⚠️ No se encontraron proxies válidos');
-                    return;
-                }
-
-                // Leer el archivo PAC actual
-                let pacContent = fs.readFileSync('proxy.pac', 'utf8');
-                
-                // Reemplazar la lista de proxies
-                const startMarker = 'var proxies = [';
-                const endMarker = '];';
-                const startIndex = pacContent.indexOf(startMarker);
-                const endIndex = pacContent.indexOf(endMarker, startIndex);
-
-                if (startIndex === -1 || endIndex === -1) {
-                    throw new Error('No se pudo encontrar la lista de proxies');
-                }
-
-                // Crear nueva lista
-                const newProxiesString = 'var proxies = [\n        "' + validProxies.join('",\n        "') + '"\n    ];';
-                const newPacContent = pacContent.substring(0, startIndex) + newProxiesString + pacContent.substring(endIndex + endMarker.length);
-                
-                // Guardar el archivo actualizado
-                fs.writeFileSync('proxy.pac', newPacContent);
-                
-                console.log(`🎯 Proxy PAC actualizado con ${validProxies.length} proxies`);
-                console.log('📋 Ejemplos:', validProxies.slice(0, 5));
-
-            } catch (error) {
-                console.error('❌ Error:', error.message);
-            }
-        }
-
-        updateProxies();
+        # Crear script de actualización usando curl y jq (ya instalado en Ubuntu)
+        cat > update_proxies.sh << 'EOF'
+        #!/bin/bash
+        
+        echo "🔍 Obteniendo proxies de GeoNode API..."
+        
+        # Hacer la petición a la API y procesar con jq
+        response=$(curl -s "https://proxylist.geonode.com/api/proxy-list?limit=50&page=1&sort_by=lastChecked&sort_type=desc")
+        
+        # Extraer proxies usando jq y formatear correctamente
+        proxies=$(echo "$response" | jq -r '.data[] | select(.protocols[] | contains("http")) | select(.uptime | tonumber > 50) | "\(.ip):\(.port)"' | head -30)
+        
+        if [ -z "$proxies" ]; then
+          echo "❌ No se pudieron obtener proxies"
+          exit 1
+        fi
+        
+        # Contar proxies
+        proxy_count=$(echo "$proxies" | wc -l)
+        echo "✅ Encontrados $proxy_count proxies válidos"
+        
+        # Leer el archivo PAC actual
+        pac_content=$(cat proxy.pac)
+        
+        # Crear el array JavaScript de proxies
+        js_proxies_array=""
+        while IFS= read -r proxy; do
+          if [ -n "$proxy" ]; then
+            if [ -n "$js_proxies_array" ]; then
+              js_proxies_array="$js_proxies_array,\n        \"$proxy\""
+            else
+              js_proxies_array="\"$proxy\""
+            fi
+          fi
+        done <<< "$proxies"
+        
+        # Reemplazar la sección de proxies en el archivo PAC
+        updated_pac=$(echo "$pac_content" | awk -v new_proxies="$js_proxies_array" '
+          /var proxies = \[/ { printing=1; print; next }
+          printing && /];/ { 
+            print "        " new_proxies
+            printing=0 
+          }
+          !printing { print }
+        ')
+        
+        # Guardar el archivo actualizado
+        echo "$updated_pac" > proxy.pac
+        
+        echo "🎯 Proxy PAC actualizado con $proxy_count proxies"
+        echo "📋 Primeros 5 proxies:"
+        echo "$proxies" | head -5
         EOF
         
-    - name: Run update script
-      run: node update.js
-      
+        # Hacer el script ejecutable y ejecutarlo
+        chmod +x update_proxies.sh
+        ./update_proxies.sh
+        
     - name: Commit and push changes
       run: |
         git config --local user.email "action@github.com"

@@ -2,8 +2,8 @@ name: Update Proxy List Automatically
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # Cada 6 horas
-  workflow_dispatch:  # Ejecución manual
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 jobs:
   update-proxies:
@@ -17,17 +17,14 @@ jobs:
         
     - name: Update proxies
       run: |
-        # Descargar datos de la API
-        echo "📥 Descargando lista de proxies..."
+        echo "📥 Downloading proxy list..."
         curl -s "https://proxylist.geonode.com/api/proxy-list?limit=50&page=1&sort_by=lastChecked&sort_type=desc" -o proxies.json
         
-        # Procesar con jq
-        echo "🔄 Procesando proxies..."
+        echo "🔄 Processing proxies..."
         jq -r '.data[]? | select(.ip? and .port?) | "\(.ip):\(.port)"' proxies.json > proxy_list.txt
         
-        # Si no hay proxies, usar lista por defecto
         if [ ! -s proxy_list.txt ]; then
-          echo "⚠️ Usando lista por defecto"
+          echo "⚠️ Using default list"
           cat > proxy_list.txt << 'DEFAULT'
 103.76.12.42:8181
 118.69.111.51:80
@@ -37,12 +34,10 @@ jobs:
 DEFAULT
         fi
         
-        # Tomar máximo 25 proxies
         head -25 proxy_list.txt > proxies_final.txt
         proxy_count=$(wc -l < proxies_final.txt)
-        echo "✅ Lista preparada con $proxy_count proxies"
+        echo "✅ Found $proxy_count proxies"
         
-        # Generar contenido JavaScript de proxies
         js_proxies=""
         while IFS= read -r proxy; do
           if [ -n "$proxy" ]; then
@@ -54,7 +49,6 @@ DEFAULT
           fi
         done < proxies_final.txt
         
-        # Actualizar el archivo PAC usando awk
         awk -v new_proxies="$js_proxies" '
           /var proxies = \[/ { in_array=1; print; next }
           in_array && /];/ { 
@@ -67,19 +61,14 @@ DEFAULT
         ' proxy.pac > proxy_updated.pac
         
         mv proxy_updated.pac proxy.pac
-        
-        echo "🎯 Actualizado proxy.pac con $proxy_count proxies"
-        echo "📋 Ejemplos:"
-        head -5 proxies_final.txt
-        
-        # Limpiar archivos temporales
         rm -f proxies.json proxy_list.txt proxies_final.txt
+        
+        echo "🎯 Updated proxy.pac with $proxy_count proxies"
         
     - name: Commit and push changes
       run: |
         git config --local user.name "wilson2533"
         git config --local user.email "wilson2533@users.noreply.github.com"
         git add proxy.pac
-        git diff --staged --quiet && echo "No changes to commit" && exit 0
-        git commit -m "🤖 Auto-update proxy list [$(date +%Y-%m-%d)]"
+        git diff --staged --quiet || git commit -m "🤖 Auto-update proxy list"
         git push

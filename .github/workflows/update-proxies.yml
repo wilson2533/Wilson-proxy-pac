@@ -13,93 +13,73 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
+        token: ${{ secrets.PROXY_PAC_TOKEN }}
         
-    - name: Create and run update script
+    - name: Update proxies
       run: |
-        # Crear script de actualización mejorado
-        cat > update_proxies.sh << 'EOF'
-        #!/bin/bash
+        # Descargar datos de la API
+        echo "📥 Descargando lista de proxies..."
+        curl -s "https://proxylist.geonode.com/api/proxy-list?limit=50&page=1&sort_by=lastChecked&sort_type=desc" -o proxies.json
         
-        echo "🔍 Obteniendo proxies de GeoNode API..."
+        # Procesar con jq
+        echo "🔄 Procesando proxies..."
+        jq -r '.data[]? | select(.ip? and .port?) | "\(.ip):\(.port)"' proxies.json > proxy_list.txt
         
-        # Hacer la petición a la API
-        response=$(curl -s "https://proxylist.geonode.com/api/proxy-list?limit=100&page=1&sort_by=lastChecked&sort_type=desc")
-        
-        # Verificar si la respuesta es válida
-        if [ -z "$response" ] || [ "$response" = "null" ]; then
-          echo "❌ No se pudo obtener respuesta de la API"
-          exit 1
+        # Si no hay proxies, usar lista por defecto
+        if [ ! -s proxy_list.txt ]; then
+          echo "⚠️ Usando lista por defecto"
+          cat > proxy_list.txt << DEFAULT
+103.76.12.42:8181
+118.69.111.51:80
+103.83.232.122:80
+190.109.18.113:8080
+103.105.77.19:8080
+DEFAULT
         fi
         
-        # Extraer proxies de forma más robusta
-        proxies=$(echo "$response" | jq -r '
-          .data[]? | 
-          select(.ip != null and .port != null) |
-          select(.protocols? != null and (.protocols | map(.? // "") | any(contains("http")))) |
-          "\(.ip):\(.port)"' | head -40)
+        # Tomar máximo 25 proxies
+        head -25 proxy_list.txt > proxies_final.txt
+        proxy_count=$(wc -l < proxies_final.txt)
+        echo "✅ Lista preparada con $proxy_count proxies"
         
-        if [ -z "$proxies" ]; then
-          echo "⚠️ No se encontraron proxies válidos, usando lista por defecto"
-          # Lista de respaldo
-          proxies="103.76.12.42:8181
-        118.69.111.51:80
-        103.83.232.122:80
-        190.109.18.113:8080
-        103.105.77.19:8080"
-        fi
-        
-        # Contar proxies
-        proxy_count=$(echo "$proxies" | wc -l)
-        echo "✅ Encontrados $proxy_count proxies"
-        
-        # Leer el archivo PAC actual
-        pac_content=$(cat proxy.pac)
-        
-        # Crear el array JavaScript de proxies
-        js_proxies_array=""
-        first=true
+        # Generar contenido JavaScript de proxies
+        js_proxies=""
         while IFS= read -r proxy; do
           if [ -n "$proxy" ]; then
-            if [ "$first" = true ]; then
-              js_proxies_array="\"$proxy\""
-              first=false
+            if [ -z "$js_proxies" ]; then
+              js_proxies="\"$proxy\""
             else
-              js_proxies_array="$js_proxies_array,\n        \"$proxy\""
+              js_proxies="$js_proxies,\n        \"$proxy\""
             fi
           fi
-        done <<< "$proxies"
+        done < proxies_final.txt
         
-        # Reemplazar la sección de proxies en el archivo PAC usando sed
-        # Primero crear un archivo temporal
-        echo "$pac_content" | sed -n '
-          /var proxies = \[/ {
-            p
-            :a
-            n
-            /];/! ba
-            i \
-        '"$js_proxies_array"'
+        # Actualizar el archivo PAC usando awk
+        awk -v new_proxies="$js_proxies" '
+          /var proxies = \[/ { in_array=1; print; next }
+          in_array && /];/ { 
+            print "        " new_proxies
+            in_array=0
+            next
           }
-          /var proxies = \[/! p
-        ' > proxy_temp.pac
+          in_array { next }
+          { print }
+        ' proxy.pac > proxy_updated.pac
         
-        # Mover el archivo temporal al original
-        mv proxy_temp.pac proxy.pac
+        mv proxy_updated.pac proxy.pac
         
-        echo "🎯 Proxy PAC actualizado con $proxy_count proxies"
-        echo "📋 Primeros 5 proxies:"
-        echo "$proxies" | head -5
-        EOF
+        echo "🎯 Actualizado proxy.pac con $proxy_count proxies"
+        echo "📋 Ejemplos:"
+        head -5 proxies_final.txt
         
-        # Hacer el script ejecutable y ejecutarlo
-        chmod +x update_proxies.sh
-        ./update_proxies.sh
+        # Limpiar archivos temporales
+        rm -f proxies.json proxy_list.txt proxies_final.txt
         
     - name: Commit and push changes
       run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
+        git config --local user.name "wilson2533"
+        git config --local user.email "tu-email@usuairo.com"  # Reemplaza con tu email real
         git add proxy.pac
-        git diff --staged --quiet || git commit -m "🤖 Auto-update proxy list [$(date +%Y-%m-%d)]"
+        git diff --staged --quiet && echo "No changes to commit" && exit 0
+        git commit -m "🤖 Auto-update proxy list [$(date +%Y-%m-%d)]"
         git push

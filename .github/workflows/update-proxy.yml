@@ -10,59 +10,82 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.PROXY_PAC_TOKEN }}
-          
-      - name: Setup
-        run: |
-          echo "📥 Downloading proxy list..."
-          curl -s "https://proxylist.geonode.com/api/proxy-list?limit=50&page=1&sort_by=lastChecked&sort_type=desc" -o proxies.json
-          
-      - name: Process
-        run: |
-          echo "🔄 Processing proxies..."
-          jq -r '.data[]? | select(.ip? and .port?) | "\(.ip):\(.port)"' proxies.json > proxy_list.txt
-          
-          if [ ! -s proxy_list.txt ]; then
-            echo "⚠️ Using default list"
-            cat > proxy_list.txt << 'DEFAULT'
-103.76.12.42:8181
-118.69.111.51:80
-103.83.232.122:80
-190.109.18.113:8080
-103.105.77.19:8080
-DEFAULT
-          fi
-          
-      - name: Update PAC
-        run: |
-          head -20 proxy_list.txt > final.txt
-          count=$(wc -l < final.txt)
-          echo "✅ Found $count proxies"
-          
-          # Build JavaScript array
-          js_array=""
-          while read proxy; do
-            [ -n "$proxy" ] || continue
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.PROXY_PAC_TOKEN }}
+        
+    - name: Download proxy list
+      run: |
+        echo "📥 Downloading proxy list..."
+        curl -s "https://proxylist.geonode.com/api/proxy-list?limit=50&page=1&sort_by=lastChecked&sort_type=desc" -o proxies.json
+        
+    - name: Process proxies
+      run: |
+        echo "🔄 Processing proxies..."
+        jq -r '.data[]? | select(.ip? and .port?) | "\(.ip):\(.port)"' proxies.json > proxy_list.txt
+        
+        if [ ! -s proxy_list.txt ]; then
+          echo "⚠️ Using default list"
+          echo "103.76.12.42:8181" > proxy_list.txt
+          echo "118.69.111.51:80" >> proxy_list.txt
+          echo "103.83.232.122:80" >> proxy_list.txt
+          echo "190.109.18.113:8080" >> proxy_list.txt
+          echo "103.105.77.19:8080" >> proxy_list.txt
+        fi
+        
+    - name: Update PAC file
+      run: |
+        head -20 proxy_list.txt > final.txt
+        count=$(wc -l < final.txt)
+        echo "✅ Found $count proxies"
+        
+        # Build JavaScript array
+        js_array=""
+        while IFS= read -r proxy; do
+          if [ -n "$proxy" ]; then
             if [ -z "$js_array" ]; then
               js_array="\"$proxy\""
             else
               js_array="$js_array,\"$proxy\""
             fi
-          done < final.txt
-          
-          # Update PAC file
-          perl -i -pe 'BEGIN{undef $/} s/var proxies = \[[^\]]*\];/var proxies = [\n        '"$js_array"'\n    ];/g' proxy.pac
-          
-          echo "🎯 Updated with $count proxies"
-          rm -f proxies.json proxy_list.txt final.txt
-          
-      - name: Commit
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add proxy.pac
-          git diff --cached --quiet || git commit -m "🤖 Update proxies"
-          git push
+          fi
+        done < final.txt
+        
+        # Create new PAC content
+        pac_content="function FindProxyForURL(url, host) {
+    // PROXIES - AUTO UPDATED
+    var proxies = [
+        $js_array
+    ];
+
+    // DOMINIOS LOCALES - ACCESO DIRECTO
+    if (isPlainHostName(host) || 
+        shExpMatch(host, \"*.local\") ||
+        shExpMatch(host, \"localhost\") ||
+        isInNet(dnsResolve(host), \"10.0.0.0\", \"255.0.0.0\") ||
+        isInNet(dnsResolve(host), \"172.16.0.0\", \"255.240.0.0\") ||
+        isInNet(dnsResolve(host), \"192.168.0.0\", \"255.255.0.0\")) {
+        return \"DIRECT\";
+    }
+
+    // SI NO HAY PROXIES, ACCESO DIRECTO
+    if (proxies.length === 0) {
+        return \"DIRECT\";
+    }
+
+    // PROXY ALEATORIO
+    var randomProxy = proxies[Math.floor(Math.random() * proxies.length)];
+    return \"PROXY \" + randomProxy + \"; DIRECT\";
+}"
+        
+        echo "$pac_content" > proxy.pac
+        echo "🎯 Updated proxy.pac with $count proxies"
+        
+    - name: Commit changes
+      run: |
+        git config user.name "github-actions"
+        git config user.email "actions@github.com"
+        git add proxy.pac
+        git diff --cached --quiet || git commit -m "🤖 Update proxies"
+        git push

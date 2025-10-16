@@ -17,54 +17,75 @@ jobs:
         
     - name: Create and run update script
       run: |
-        # Crear script de actualización usando curl y jq (ya instalado en Ubuntu)
+        # Crear script de actualización mejorado
         cat > update_proxies.sh << 'EOF'
         #!/bin/bash
         
         echo "🔍 Obteniendo proxies de GeoNode API..."
         
-        # Hacer la petición a la API y procesar con jq
-        response=$(curl -s "https://proxylist.geonode.com/api/proxy-list?limit=50&page=1&sort_by=lastChecked&sort_type=desc")
+        # Hacer la petición a la API
+        response=$(curl -s "https://proxylist.geonode.com/api/proxy-list?limit=100&page=1&sort_by=lastChecked&sort_type=desc")
         
-        # Extraer proxies usando jq y formatear correctamente
-        proxies=$(echo "$response" | jq -r '.data[] | select(.protocols[] | contains("http")) | select(.uptime | tonumber > 50) | "\(.ip):\(.port)"' | head -30)
+        # Verificar si la respuesta es válida
+        if [ -z "$response" ] || [ "$response" = "null" ]; then
+          echo "❌ No se pudo obtener respuesta de la API"
+          exit 1
+        fi
+        
+        # Extraer proxies de forma más robusta
+        proxies=$(echo "$response" | jq -r '
+          .data[]? | 
+          select(.ip != null and .port != null) |
+          select(.protocols? != null and (.protocols | map(.? // "") | any(contains("http")))) |
+          "\(.ip):\(.port)"' | head -40)
         
         if [ -z "$proxies" ]; then
-          echo "❌ No se pudieron obtener proxies"
-          exit 1
+          echo "⚠️ No se encontraron proxies válidos, usando lista por defecto"
+          # Lista de respaldo
+          proxies="103.76.12.42:8181
+        118.69.111.51:80
+        103.83.232.122:80
+        190.109.18.113:8080
+        103.105.77.19:8080"
         fi
         
         # Contar proxies
         proxy_count=$(echo "$proxies" | wc -l)
-        echo "✅ Encontrados $proxy_count proxies válidos"
+        echo "✅ Encontrados $proxy_count proxies"
         
         # Leer el archivo PAC actual
         pac_content=$(cat proxy.pac)
         
         # Crear el array JavaScript de proxies
         js_proxies_array=""
+        first=true
         while IFS= read -r proxy; do
           if [ -n "$proxy" ]; then
-            if [ -n "$js_proxies_array" ]; then
-              js_proxies_array="$js_proxies_array,\n        \"$proxy\""
-            else
+            if [ "$first" = true ]; then
               js_proxies_array="\"$proxy\""
+              first=false
+            else
+              js_proxies_array="$js_proxies_array,\n        \"$proxy\""
             fi
           fi
         done <<< "$proxies"
         
-        # Reemplazar la sección de proxies en el archivo PAC
-        updated_pac=$(echo "$pac_content" | awk -v new_proxies="$js_proxies_array" '
-          /var proxies = \[/ { printing=1; print; next }
-          printing && /];/ { 
-            print "        " new_proxies
-            printing=0 
+        # Reemplazar la sección de proxies en el archivo PAC usando sed
+        # Primero crear un archivo temporal
+        echo "$pac_content" | sed -n '
+          /var proxies = \[/ {
+            p
+            :a
+            n
+            /];/! ba
+            i \
+        '"$js_proxies_array"'
           }
-          !printing { print }
-        ')
+          /var proxies = \[/! p
+        ' > proxy_temp.pac
         
-        # Guardar el archivo actualizado
-        echo "$updated_pac" > proxy.pac
+        # Mover el archivo temporal al original
+        mv proxy_temp.pac proxy.pac
         
         echo "🎯 Proxy PAC actualizado con $proxy_count proxies"
         echo "📋 Primeros 5 proxies:"

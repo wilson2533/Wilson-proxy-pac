@@ -28,7 +28,7 @@ jobs:
         # Si no hay proxies, usar lista por defecto
         if [ ! -s proxy_list.txt ]; then
           echo "⚠️ Usando lista por defecto"
-          cat > proxy_list.txt << DEFAULT
+          cat > proxy_list.txt << 'DEFAULT'
 103.76.12.42:8181
 118.69.111.51:80
 103.83.232.122:80
@@ -78,7 +78,7 @@ DEFAULT
     - name: Commit and push changes
       run: |
         git config --local user.name "wilson2533"
-        git config --local user.email "tu-email@usuairo.com"  # Reemplaza con tu email real
+        git config --local user.email "wilson2533@users.noreply.github.com"
         git add proxy.pac
         git diff --staged --quiet && echo "No changes to commit" && exit 0
         git commit -m "🤖 Auto-update proxy list [$(date +%Y-%m-%d)]"

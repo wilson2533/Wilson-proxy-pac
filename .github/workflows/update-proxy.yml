@@ -52,8 +52,9 @@ jobs:
           fi
         done < final.txt
         
-        # Create new PAC content
-        pac_content="function FindProxyForURL(url, host) {
+        # Create new PAC file using a template
+        cat > proxy.pac << EOF
+function FindProxyForURL(url, host) {
     // PROXIES - AUTO UPDATED
     var proxies = [
         $js_array
@@ -61,25 +62,25 @@ jobs:
 
     // DOMINIOS LOCALES - ACCESO DIRECTO
     if (isPlainHostName(host) || 
-        shExpMatch(host, \"*.local\") ||
-        shExpMatch(host, \"localhost\") ||
-        isInNet(dnsResolve(host), \"10.0.0.0\", \"255.0.0.0\") ||
-        isInNet(dnsResolve(host), \"172.16.0.0\", \"255.240.0.0\") ||
-        isInNet(dnsResolve(host), \"192.168.0.0\", \"255.255.0.0\")) {
-        return \"DIRECT\";
+        shExpMatch(host, "*.local") ||
+        shExpMatch(host, "localhost") ||
+        isInNet(dnsResolve(host), "10.0.0.0", "255.0.0.0") ||
+        isInNet(dnsResolve(host), "172.16.0.0", "255.240.0.0") ||
+        isInNet(dnsResolve(host), "192.168.0.0", "255.255.0.0")) {
+        return "DIRECT";
     }
 
     // SI NO HAY PROXIES, ACCESO DIRECTO
     if (proxies.length === 0) {
-        return \"DIRECT\";
+        return "DIRECT";
     }
 
     // PROXY ALEATORIO
     var randomProxy = proxies[Math.floor(Math.random() * proxies.length)];
-    return \"PROXY \" + randomProxy + \"; DIRECT\";
-}"
+    return "PROXY " + randomProxy + "; DIRECT";
+}
+EOF
         
-        echo "$pac_content" > proxy.pac
         echo "🎯 Updated proxy.pac with $count proxies"
         
     - name: Commit changes
